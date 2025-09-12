@@ -2,6 +2,11 @@ import numpy as np
 import random
 import matplotlib.pyplot as plt
 from collections import defaultdict
+import os, csv, json
+from datetime import datetime
+from collections import deque
+
+
 
 GRID_SIZE = 64
 TARGET_FILL = 0.20  # 20% obstacles
@@ -15,13 +20,45 @@ TETROMINOES = {
     "S": [(0,1),(0,2),(1,0),(1,1)]
 }
 
+NEI_ORDER = [(-1,0),(0,1),(1,0),(0,-1)]  # up, right, down, left (deterministic)'
+
 # --- agent/constants ---
 FREE, OBST = 0, 1
 NUM_ENEMIES = 10
 JUNK = 2  # permanent obstacle created by enemy crashes
+SEED = 42  # change per run to reproduce
+rng = np.random.default_rng(SEED)
+random.seed(SEED)
 
 
-rng = np.random.default_rng()  # pass a seed if you want reproducibility, e.g., np.random.default_rng(42)
+"""Helpers"""
+def ensure_dir(path):
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def count_junk(grid):
+    return int(np.sum(grid == JUNK))
+
+
+def export_config_json(outdir, cfg: dict):
+    with open(os.path.join(outdir, "run_config.json"), "w") as f:
+        json.dump(cfg, f, indent=2)
+
+
+def export_log_csv(outdir, rows, header):
+    with open(os.path.join(outdir, "run_log.csv"), "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(header)
+        w.writerows(rows)
+
+
+def neighbors4_all(r, c, n):
+    for dr, dc in ((-1,0),(1,0),(0,-1),(0,1)):
+        rr, cc = r+dr, c+dc
+        if 0 <= rr < n and 0 <= cc < n:
+            yield rr, cc
+
 
 def random_free_cell(grid, taken=None):
     """Pick a random FREE (0) cell not already taken."""
@@ -169,6 +206,245 @@ def generate_obstacles():
     return grid
 
 
+def proof_run(out_name="proof_run_001", max_steps=500, render_every=None):
+    # Output folder with timestamp
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    outdir = ensure_dir(f"{out_name}_{stamp}")
+
+    # --- Build world
+    grid = generate_obstacles()
+    goal, hero, enemies = place_agents(grid)
+
+    # --- Save START frame (compute path first)
+    start_path, _ = bfs_path(grid, hero, goal, set(enemies), keepout=1)
+    draw_world(grid, goal, hero, enemies,
+               path=start_path,
+               save_path=os.path.join(outdir, "frame_start.png"))
+
+    # --- Simulate with logging
+    log_rows = []
+    header = ["t", "hero_r", "hero_c", "enemy_count", "junk_cells", "status"]
+
+    status = "running"
+    t = 0
+    log_rows.append([t, hero[0], hero[1], len(enemies), count_junk(grid), status])
+
+    while t < max_steps and status == "running":
+        # one simulation step (hero BFS + enemies move)
+        hero, enemies, status = sim_step(grid, hero, goal, enemies)
+        t += 1
+        log_rows.append([t, hero[0], hero[1], len(enemies), count_junk(grid), status])
+
+        # Optional periodic snapshots with the CURRENT path
+        if render_every and (t % render_every == 0):
+            cur_path, _ = bfs_path(grid, hero, goal, set(enemies), keepout=1)
+            draw_world(grid, goal, hero, enemies,
+                       path=cur_path,
+                       save_path=os.path.join(outdir, f"frame_{t:04d}.png"))
+
+    # --- Save FINAL frame (compute path for the terminal state)
+    final_path, _ = bfs_path(grid, hero, goal, set(enemies), keepout=1)
+    draw_world(grid, goal, hero, enemies,
+               path=final_path,
+               save_path=os.path.join(outdir, "frame_final.png"))
+
+    # --- Export logs + config
+    export_log_csv(outdir, log_rows, header)
+    cfg = {
+        "grid_size": int(grid.shape[0]),
+        "target_fill": float(TARGET_FILL),
+        "num_enemies": int(NUM_ENEMIES),
+        "seed": SEED,
+        "max_steps": max_steps,
+        "render_every": render_every,
+        "result": status,
+        "steps_taken": t
+    }
+    export_config_json(outdir, cfg)
+
+    print(f"[proof] result={status} steps={t} dir={outdir}")
+    return outdir, status, t
+
+
+
+def bfs_path(grid, start, goal, enemy_set, keepout=0):
+    """
+    Unit-cost BFS on 4-connected grid.
+    Returns (path, meta) where:
+      - path is [ (r,c), ..., goal ] or None
+      - meta = {"expanded": int}
+    Blocks: obstacles, junk, enemies, and (optionally) enemy-adjacent cells (keepout>0).
+    """
+    n = grid.shape[0]
+    if start == goal:
+        return [start], {"expanded": 0}
+
+    # Build blocked set
+    blocked = set(map(tuple, np.argwhere(grid != FREE)))
+    blocked.discard(start)  # instead of blocked -= {(start,)}
+
+    # Add enemies
+    blocked |= set(enemy_set)
+
+    # Optional keepout ring around enemies
+    if keepout > 0:
+        for er, ec in enemy_set:
+            for dr in range(-keepout, keepout+1):
+                for dc in range(-keepout, keepout+1):
+                    if abs(dr) + abs(dc) == 1:  # 4-neighbors only
+                        rr, cc = er+dr, ec+dc
+                        if 0 <= rr < n and 0 <= cc < n:
+                            blocked.add((rr, cc))
+
+    if goal in blocked:
+        # allow goal even if currently occupied (hero can step in when clear)
+        pass
+
+    q = deque([start])
+    parent = {start: None}
+    expanded = 0
+
+    while q:
+        r, c = q.popleft()
+        expanded += 1
+        for dr, dc in NEI_ORDER:
+            rr, cc = r+dr, c+dc
+            if not (0 <= rr < n and 0 <= cc < n):
+                continue
+            nxt = (rr, cc)
+            if nxt in parent:
+                continue
+            if nxt in blocked:
+                continue
+            parent[nxt] = (r, c)
+            if nxt == goal:
+                # reconstruct
+                path = [nxt]
+                while path[-1] is not None:
+                    path.append(parent[path[-1]])
+                path.pop()
+                path.reverse()
+                return path, {"expanded": expanded}
+            q.append(nxt)
+
+    return None, {"expanded": expanded}
+
+
+def sign(x): 
+    return (x > 0) - (x < 0)
+
+
+def step_enemies(grid, hero, enemies):
+    """
+    Enemies move 1 cell toward hero (Manhattan).
+    If an enemy's move would hit boundary/obstacle/another enemy -> it BREAKS:
+      - current cell becomes junk (grid=1), enemy removed.
+    If an enemy moves into hero -> returns game_over=True.
+    """
+    n = grid.shape[0]
+    hero_r, hero_c = hero
+    # First compute intended moves
+    intents = []
+    occupied = set(enemies)  # current enemy cells to detect collisions
+    for (r, c) in enemies:
+        dr = sign(hero_r - r)
+        dc = sign(hero_c - c)
+        # prefer the axis with larger distance; tie-break deterministic
+        if abs(hero_r - r) >= abs(hero_c - c):
+            nr, nc = r + dr, c
+            alt = (r, c + dc)
+        else:
+            nr, nc = r, c + dc
+            alt = (r + dr, c)
+        intents.append(((r, c), (nr, nc), alt))
+
+    new_enemies = []
+    dest_counts = {}
+    # Count primary destinations
+    for _, dest, _ in intents:
+        dest_counts[dest] = dest_counts.get(dest, 0) + 1
+
+    # Resolve each enemy
+    for (r, c), (nr, nc), alt in intents:
+        # Check primary dest
+        bad = False
+        if not (0 <= nr < n and 0 <= nc < n): 
+            bad = True
+        elif grid[nr, nc] != FREE:  # blocks OBST (1) and JUNK (2)
+            bad = True
+        elif (nr, nc) in occupied: 
+            bad = True
+        elif dest_counts[(nr, nc)] > 1: 
+            bad = True  # head-on into same cell
+
+        if bad:
+            # BREAKS -> current cell becomes junk, enemy removed
+            grid[r, c] = JUNK
+            continue
+
+        # Move succeeds
+        if (nr, nc) == (hero_r, hero_c):
+            return [], True  # hero destroyed
+        new_enemies.append((nr, nc))
+
+    return new_enemies, False
+
+
+def sim_step(grid, hero, goal, enemies):
+    enemy_set = set(enemies)
+
+    # --- HERO move (BFS replan each step)
+    path, meta = bfs_path(grid, hero, goal, enemy_set, keepout=1)  # set keepout=0 if no buffer
+    # print(f"[BFS] expanded={meta['expanded']}")  # uncomment if  live log
+
+    if path and len(path) >= 2:
+        hero_next = path[1]
+    else:
+        hero_next = hero  # no path -> stay 
+
+    if hero_next in enemy_set:
+        return hero, enemies, "lose"
+
+    hero = hero_next
+    if hero == goal:
+        return hero, enemies, "win"
+
+    # ENEMIES move exactly as before
+    enemies, game_over = step_enemies(grid, hero, enemies)
+    if game_over:
+        return hero, enemies, "lose"
+
+    if hero == goal:
+        return hero, enemies, "win"
+
+    return hero, enemies, "running"
+
+
+
+def simulate(grid, goal, hero, enemies, max_steps=500, render_every=None):
+    """
+    Run until win/lose or max_steps. If render_every is set (e.g., 10), redraw periodically.
+    """
+    for step in range(1, max_steps+1):
+        hero, enemies, status = sim_step(grid, hero, goal, enemies)
+
+        if render_every and (step % render_every == 0 or status != "running"):
+            draw_world(grid, goal, hero, enemies, save_path=None)
+
+        if status != "running":
+            return status, step
+    return "running", max_steps
+
+
+def draw_path(ax, path):
+    if not path or len(path) < 2: 
+        return
+    xs = [c+0.5 for r,c in path]
+    ys = [r+0.5 for r,c in path]
+    ax.plot(xs, ys, linewidth=1.5, alpha=0.9)
+
+
+
 def show_grid(grid):
     GRID_SIZE = grid.shape[0]
     fig, ax = plt.subplots(figsize=(8,8), dpi=120)
@@ -196,7 +472,7 @@ def show_grid(grid):
     plt.close()
 
 
-def draw_world(grid, goal, hero, enemies, save_path="flatland_map.png"):
+def draw_world(grid, goal, hero, enemies, path=None, save_path="flatland_map.png"):
     n = grid.shape[0]
     fig, ax = plt.subplots(figsize=(9,9), dpi=120, facecolor="white")
     ax.set_facecolor("white")
@@ -222,6 +498,12 @@ def draw_world(grid, goal, hero, enemies, save_path="flatland_map.png"):
     ax.scatter(hx, hy, marker='o', s=140, facecolors='tab:blue',  edgecolors='black', linewidths=0.8, label='Hero',  zorder=3)
     ax.scatter(ex, ey, marker='^', s=120, facecolors='tab:red',   edgecolors='black', linewidths=0.6, label='Enemy', zorder=3)
 
+    # draw planned path (if provided)
+    if path and len(path) >= 2:
+        xs = [c + 0.5 for (r, c) in path]
+        ys = [r + 0.5 for (r, c) in path]
+        ax.plot(xs, ys, linewidth=1.8, alpha=0.9, zorder=2)
+
     density = np.sum(blocked) / (n*n)
     ax.set_title(f"{n}×{n} World (~20% tetromino obstacles)\nDensity={density:.2f}")
 
@@ -231,6 +513,7 @@ def draw_world(grid, goal, hero, enemies, save_path="flatland_map.png"):
     plt.tight_layout(pad=0.2)
     plt.savefig(save_path, dpi=300, bbox_inches="tight", facecolor="white")
     plt.show(block=False); plt.pause(3); plt.close()
+
 
 
 def world_stats(grid):
@@ -246,24 +529,33 @@ def world_stats(grid):
 def main():
     grid = generate_obstacles()
     goal, hero, enemies = place_agents(grid)
-    draw_world(grid, goal, hero, enemies, save_path="flatland_step0.png")
 
-    status = "ok"
+    # initial snapshot (with path)
+    path, _ = bfs_path(grid, hero, goal, set(enemies), keepout=1)
+    draw_world(grid, goal, hero, enemies, path=path, save_path="flatland_step0.png")
+
+    # run a few steps with consistent updates
     for t in range(5):
-        grid, enemies, status = update_enemies(grid, hero, enemies)
+        hero, enemies, status = sim_step(grid, hero, goal, enemies)
         print(f"t={t+1}, enemies={len(enemies)}, status={status}")
         world_stats(grid)
-        draw_world(grid, goal, hero, enemies, save_path=f"flatland_step{t+1}.png")
-        if status != "ok":
+
+        # recompute path for the CURRENT state and draw
+        path, _ = bfs_path(grid, hero, goal, set(enemies), keepout=1)
+        draw_world(grid, goal, hero, enemies, path=path, save_path=f"flatland_step{t+1}.png")
+
+        if status != "running":
             break
+
         blocked_ratio = np.mean(grid != FREE)
-        print(f"Blocked ratio = {blocked_ratio:.2f}")  # should be ~0.20 at t=0, then rise slowly
-
-
+        print(f"Blocked ratio = {blocked_ratio:.2f}")
 
 
 if __name__ == "__main__":
+
     main()
+    outdir, status, steps = proof_run(out_name="flatland_proof", max_steps=500, render_every=50)
+    print("Artifacts written to:", outdir)
 
 
 
