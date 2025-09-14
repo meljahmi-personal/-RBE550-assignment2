@@ -108,3 +108,11 @@ steps=98, enemies_end=0, junk_end=10, avg_bfs_expanded=1990.0
 - numpy
 - matplotlib
 - imageio
+
+## GitHub repository:
+---
+
+https://github.com/meljahmi-personal/-RBE550-assignment2.git
+
+---
+
