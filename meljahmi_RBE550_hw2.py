@@ -2,9 +2,13 @@ import numpy as np
 import random
 import matplotlib.pyplot as plt
 from collections import defaultdict
-import os, csv, json
+import os
+import csv
+import json
 from datetime import datetime
 from collections import deque
+import csv
+
 
 
 
@@ -223,17 +227,32 @@ def proof_run(out_name="proof_run_001", max_steps=500, render_every=None):
 
     # --- Simulate with logging
     log_rows = []
-    header = ["t", "hero_r", "hero_c", "enemy_count", "junk_cells", "status"]
+    header = ["t", "hero_r", "hero_c", "enemy_count", "junk_cells",
+              "status", "bfs_expanded", "path_len"]
 
     status = "running"
     t = 0
-    log_rows.append([t, hero[0], hero[1], len(enemies), count_junk(grid), status])
+
+    # compute initial path + expansions
+    path0, meta0 = bfs_path(grid, hero, goal, set(enemies), keepout=1)
+    plen0 = len(path0) if path0 else 0
+    exp0 = int(meta0.get("expanded", 0))
+
+    log_rows.append([t, hero[0], hero[1], len(enemies),
+                     count_junk(grid), status, exp0, plen0])
+
 
     while t < max_steps and status == "running":
         # one simulation step (hero BFS + enemies move)
         hero, enemies, status = sim_step(grid, hero, goal, enemies)
         t += 1
-        log_rows.append([t, hero[0], hero[1], len(enemies), count_junk(grid), status])
+       
+        path_t, meta_t = bfs_path(grid, hero, goal, set(enemies), keepout=1)
+        plen_t = len(path_t) if path_t else 0
+        exp_t = int(meta_t.get("expanded", 0))
+
+        log_rows.append([t, hero[0], hero[1], len(enemies),
+                         count_junk(grid), status, exp_t, plen_t])
 
         # Optional periodic snapshots with the CURRENT path
         if render_every and (t % render_every == 0):
@@ -261,6 +280,18 @@ def proof_run(out_name="proof_run_001", max_steps=500, render_every=None):
         "steps_taken": t
     }
     export_config_json(outdir, cfg)
+    
+    # --- Optional GIF from saved frames ---
+    try:
+        import imageio, glob
+        frames = sorted(glob.glob(os.path.join(outdir, "frame_*.png")))
+        if len(frames) >= 2:
+            imgs = [imageio.v2.imread(f) for f in frames]
+            imageio.mimsave(os.path.join(outdir, "run.gif"), imgs, duration=0.06)  # ~16 FPS
+            print("[gif] wrote", os.path.join(outdir, "run.gif"))
+    except Exception as e:
+        print("[gif] skipped:", e)
+
 
     print(f"[proof] result={status} steps={t} dir={outdir}")
     return outdir, status, t
@@ -269,61 +300,45 @@ def proof_run(out_name="proof_run_001", max_steps=500, render_every=None):
 
 def bfs_path(grid, start, goal, enemy_set, keepout=0):
     """
-    Unit-cost BFS on 4-connected grid.
-    Returns (path, meta) where:
-      - path is [ (r,c), ..., goal ] or None
-      - meta = {"expanded": int}
-    Blocks: obstacles, junk, enemies, and (optionally) enemy-adjacent cells (keepout>0).
+    Breadth-First Search (BFS) on a 4-connected grid.
+    Returns:
+      path : list of (r,c) from start to goal (or None if no path)
+      meta : dict with {"expanded": count}
+    Blocks: obstacles, junk, enemies, and (optionally) cells adjacent to enemies (keepout).
     """
     n = grid.shape[0]
     if start == goal:
         return [start], {"expanded": 0}
 
-    # Build blocked set
     blocked = set(map(tuple, np.argwhere(grid != FREE)))
-    blocked.discard(start)  # instead of blocked -= {(start,)}
-
-    # Add enemies
+    blocked.discard(start)
     blocked |= set(enemy_set)
 
-    # Optional keepout ring around enemies
     if keepout > 0:
         for er, ec in enemy_set:
-            for dr in range(-keepout, keepout+1):
-                for dc in range(-keepout, keepout+1):
-                    if abs(dr) + abs(dc) == 1:  # 4-neighbors only
-                        rr, cc = er+dr, ec+dc
-                        if 0 <= rr < n and 0 <= cc < n:
-                            blocked.add((rr, cc))
-
-    if goal in blocked:
-        # allow goal even if currently occupied (hero can step in when clear)
-        pass
+            for dr, dc in NEI_ORDER:
+                rr, cc = er+dr, ec+dc
+                if 0 <= rr < n and 0 <= cc < n:
+                    blocked.add((rr, cc))
 
     q = deque([start])
     parent = {start: None}
     expanded = 0
 
     while q:
-        r, c = q.popleft()
-        expanded += 1
-        for dr, dc in NEI_ORDER:
-            rr, cc = r+dr, c+dc
-            if not (0 <= rr < n and 0 <= cc < n):
-                continue
+        r, c = q.popleft(); expanded += 1
+        for rr, cc in neighbors4_all(r, c, n):
             nxt = (rr, cc)
             if nxt in parent:
                 continue
-            if nxt in blocked:
+            if nxt in blocked and nxt != goal:
                 continue
             parent[nxt] = (r, c)
             if nxt == goal:
-                # reconstruct
                 path = [nxt]
                 while path[-1] is not None:
                     path.append(parent[path[-1]])
-                path.pop()
-                path.reverse()
+                path.pop(); path.reverse()
                 return path, {"expanded": expanded}
             q.append(nxt)
 
@@ -423,17 +438,19 @@ def sim_step(grid, hero, goal, enemies):
 
 def simulate(grid, goal, hero, enemies, max_steps=500, render_every=None):
     """
-    Run until win/lose or max_steps. If render_every is set (e.g., 10), redraw periodically.
+    Run the simulation loop until hero wins, loses, or max_steps reached.
+    If render_every is set (e.g., 10), save a snapshot frame every N steps.
     """
     for step in range(1, max_steps+1):
         hero, enemies, status = sim_step(grid, hero, goal, enemies)
 
         if render_every and (step % render_every == 0 or status != "running"):
-            draw_world(grid, goal, hero, enemies, save_path=None)
+            draw_world(grid, goal, hero, enemies, save_path=f"frame_{step:04d}.png")
 
         if status != "running":
             return status, step
     return "running", max_steps
+
 
 
 def draw_path(ax, path):
@@ -472,7 +489,8 @@ def show_grid(grid):
     plt.close()
 
 
-def draw_world(grid, goal, hero, enemies, path=None, save_path="flatland_map.png"):
+
+def draw_world(grid, goal, hero, enemies, path=None, save_path="flatland_map.png", overlay=None):
     n = grid.shape[0]
     fig, ax = plt.subplots(figsize=(9,9), dpi=120, facecolor="white")
     ax.set_facecolor("white")
@@ -492,28 +510,43 @@ def draw_world(grid, goal, hero, enemies, path=None, save_path="flatland_map.png
 
     gx, gy = centers([goal])
     hx, hy = centers([hero])
-    ex, ey = centers(enemies)
+    if enemies:
+        ex, ey = centers(enemies)
 
     ax.scatter(gx, gy, marker='s', s=140, facecolors='tab:green', edgecolors='black', linewidths=0.8, label='Goal',  zorder=3)
     ax.scatter(hx, hy, marker='o', s=140, facecolors='tab:blue',  edgecolors='black', linewidths=0.8, label='Hero',  zorder=3)
-    ax.scatter(ex, ey, marker='^', s=120, facecolors='tab:red',   edgecolors='black', linewidths=0.6, label='Enemy', zorder=3)
+    if enemies:
+        ax.scatter(ex, ey, marker='^', s=120, facecolors='tab:red', edgecolors='black', linewidths=0.6, label='Enemy', zorder=3)
 
-    # draw planned path (if provided)
     if path and len(path) >= 2:
         xs = [c + 0.5 for (r, c) in path]
         ys = [r + 0.5 for (r, c) in path]
         ax.plot(xs, ys, linewidth=1.8, alpha=0.9, zorder=2)
 
     density = np.sum(blocked) / (n*n)
-    ax.set_title(f"{n}×{n} World (~20% tetromino obstacles)\nDensity={density:.2f}")
+    ax.set_title(f"{n}×{n} World (~20% tetromino obstacles)  Density={density:.2f}")
 
     leg = ax.legend(loc="upper right", frameon=True, fontsize=9)
     leg.get_frame().set_alpha(0.9)
 
-    plt.tight_layout(pad=0.2)
-    plt.savefig(save_path, dpi=300, bbox_inches="tight", facecolor="white")
-    plt.show(block=False); plt.pause(3); plt.close()
+    # --- overlay box (top-left) ---
+    if overlay:
+        ax.text(
+            0.02, 0.98, overlay,
+            transform=ax.transAxes,
+            va="top", ha="left",
+            fontsize=9,
+            bbox=dict(boxstyle="round,pad=0.25", facecolor="white", edgecolor="black", alpha=0.85)
+        )
 
+    plt.tight_layout(pad=0.2)
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches="tight", facecolor="white")
+
+    # in draw_world at the end
+    plt.show(block=False)
+    plt.pause(0.1)
+    plt.close()
 
 
 def world_stats(grid):
@@ -523,6 +556,68 @@ def world_stats(grid):
     free  = np.count_nonzero(grid == FREE)
     print(f"free={free}, obst={obst}, junk={junk}, "
           f"blocked={(obst+junk)}/{total} = {(obst+junk)/total:.4f}")
+
+
+
+def load_run_csv(outdir):
+    path = os.path.join(outdir, "run_log.csv")
+    rows = []
+    with open(path, newline="") as f:
+        r = csv.DictReader(f)
+        for row in r:
+            # convert to ints where useful
+            row["t"] = int(row["t"])
+            row["enemy_count"] = int(row["enemy_count"])
+            row["junk_cells"] = int(row["junk_cells"])
+            # these two exist if you added the earlier BFS-logging patch
+            row["bfs_expanded"] = int(row.get("bfs_expanded", 0) or 0)
+            row["path_len"] = int(row.get("path_len", 0) or 0)
+            rows.append(row)
+    return rows
+
+def plot_from_outdir(outdir):
+    data = load_run_csv(outdir)
+    t = [d["t"] for d in data]
+    enemies = [d["enemy_count"] for d in data]
+    junk = [d["junk_cells"] for d in data]
+    exps = [d["bfs_expanded"] for d in data]
+    plen = [d["path_len"] for d in data]
+
+    # 1) BFS expansions per step (if you added that column)
+    if any(exps):
+        plt.figure()
+        plt.plot(t, exps)
+        plt.xlabel("time step")
+        plt.ylabel("BFS nodes expanded")
+        plt.title("BFS expansions vs time")
+        plt.grid(True, linewidth=0.3)
+        plt.savefig(os.path.join(outdir, "plot_expansions.png"), dpi=200, bbox_inches="tight")
+        plt.close()
+
+    # 2) Enemies & junk over time
+    plt.figure()
+    plt.plot(t, enemies, label="enemies")
+    plt.plot(t, junk, label="junk")
+    plt.xlabel("time step")
+    plt.ylabel("count")
+    plt.title("Enemies and Junk vs time")
+    plt.grid(True, linewidth=0.3)
+    plt.legend()
+    plt.savefig(os.path.join(outdir, "plot_enemies_junk.png"), dpi=200, bbox_inches="tight")
+    plt.close()
+
+def plot_latest_run():
+    # pick the most recent flatland_proof_* folder
+    runs = sorted(glob.glob("flatland_proof_*"))
+    if not runs:
+        print("No flatland_proof_* folder found.")
+        return
+    outdir = runs[-1]
+    print("Plotting from:", outdir)
+    plot_from_outdir(outdir)
+
+# call this if you want to auto-plot the most recent run:
+# plot_latest_run()
 
 
 # --- Main ---
@@ -551,11 +646,28 @@ def main():
         print(f"Blocked ratio = {blocked_ratio:.2f}")
 
 
+def quick_summary(outdir):
+    import csv, os
+    with open(os.path.join(outdir, "run_log.csv")) as f:
+        r = list(csv.DictReader(f))
+    steps = int(r[-1]["t"])
+    enemies_end = int(r[-1]["enemy_count"])
+    junk_end = int(r[-1]["junk_cells"])
+    exps = [int(x.get("bfs_expanded", 0) or 0) for x in r]
+    avg_exp = sum(exps) / len(exps)
+    print(f"steps={steps}, enemies_end={enemies_end}, junk_end={junk_end}, avg_bfs_expanded={avg_exp:.1f}")
+
+
 if __name__ == "__main__":
 
     main()
     outdir, status, steps = proof_run(out_name="flatland_proof", max_steps=500, render_every=50)
     print("Artifacts written to:", outdir)
+
+    # --- make plots for this run ---
+    plot_from_outdir(outdir)
+    
+    quick_summary(outdir)
 
 
 
