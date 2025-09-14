@@ -59,7 +59,7 @@ pip install numpy matplotlib imageio
 
 ## Running the Simulation
 
-### Quick demo (5 steps, shows hero/enemies moving)
+### Quick demo (4 steps, shows hero/enemies moving)
 ```bash
 python3 main.py --steps 4 --show
 ```
