@@ -6,6 +6,7 @@ from planner import Planner
 from simulator import Simulator, plot_from_outdir, quick_summary
 import utils   # this brings in SHOW_FIGURES
 import argparse
+import matplotlib.pyplot as plt
 
 
 def main_demo_steps():
@@ -42,6 +43,13 @@ if __name__ == "__main__":
 
     # update flag in utils
     utils.SHOW_FIGURES = args.show
+    
+        
+    # non-interactive unless --show
+    if args.show:
+        plt.ion()   # interactive on (non-blocking)
+    else:
+        plt.ioff()  # fully headless
 
     # --- small demo
     main_demo_steps()

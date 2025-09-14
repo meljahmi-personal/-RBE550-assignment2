@@ -3,6 +3,9 @@ import random
 import numpy as np
 import matplotlib.pyplot as plt
 from utils import FREE, OBST, JUNK, GRID_SIZE, TARGET_FILL, rng, SHOW_FIGURES
+import matplotlib
+
+
 
 TETROMINOES = {
     "I": [(0,0),(1,0),(2,0),(3,0)],
@@ -34,6 +37,14 @@ class GridWorld:
         for r, c in coords:
             self.grid[r, c] = OBST
         return True
+        
+
+    def maybe_show(delay=0.5):
+        # Only show if not using Agg (headless) and interactive is desired
+        if matplotlib.get_backend().lower() != "agg" and plt.isinteractive():
+            plt.show(block=False)
+            plt.pause(delay)
+
 
     def generate_obstacles(self):
         placed = 0
@@ -135,8 +146,21 @@ class GridWorld:
         if save_path:
             plt.savefig(save_path, dpi=300, bbox_inches="tight", facecolor="white")
 
-        if SHOW_FIGURES:
+        if SHOW_FIGURES and plt.get_backend().lower() != "agg":
             plt.show(block=False)
             plt.pause(0.5)
         plt.close()
+        
+        # --- single pass: save (once), optional show, then close ---
+        fig.tight_layout(pad=0.2)
+        if save_path:
+            fig.savefig(save_path, dpi=300, bbox_inches="tight", facecolor="white")
+
+        if SHOW_FIGURES and matplotlib.get_backend().lower() != "agg":
+            plt.show(block=False)
+            plt.pause(0.5)
+
+        plt.close(fig)
+
+
 

@@ -52,8 +52,14 @@ pip install -r requirements.txt
 
 If `requirements.txt` is not present, install manually:
 ```bash
-pip install numpy matplotlib imageio
+pip install numpy matplotlib imageio pillow
 ```
+
+### 4. System dependencies
+- Tkinter (for matplotlib GUI windows).
+  - On Ubuntu/Debian: `sudo apt-get install python3-tk`
+  - On Fedora: `sudo dnf install python3-tkinter`
+  - On Windows/macOS: Tkinter is usually bundled with Python.
 
 ---
 
@@ -105,9 +111,13 @@ steps=98, enemies_end=0, junk_end=10, avg_bfs_expanded=1990.0
 
 ## Requirements
 - Python 3.8+ (tested with 3.10/3.11)
-- numpy
-- matplotlib
-- imageio
+- numpy==1.26.4
+- matplotlib==3.8.4
+- pillow==10.3.0
+- imageio==2.35.1
+- Tkinter (system dependency for matplotlib GUI)
+- Tested environment: Ubuntu 22.04, Python 3.10.12, pip 24.0
+
 
 ## GitHub repository:
 ---

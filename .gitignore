@@ -1,22 +1,9 @@
-# Python
-__pycache__/
-*.py[cod]
-*.egg-info/
+# venvs
+hw2env/
 .venv/
 venv/
-env/
-*.log
-
-# OS/editor
-.DS_Store
-Thumbs.db
-.vscode/
-.idea/
-
-# Generated media
-outputs/frames/
-outputs/videos/
+# Python caches
+__pycache__/
+*.pyc
 *.png
-*.gif
-*.mp4
-
+flatland_proof_20250914_154846/
