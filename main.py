@@ -13,25 +13,22 @@ def main_demo_steps():
     world.generate_obstacles()
     ent = Entities(world)
 
-    # initial snapshot with path
-    path, _ = Planner.bfs_path(world, ent.hero, ent.goal, set(ent.enemies), keepout=1)
-    world.draw(ent.goal, ent.hero, ent.enemies, path=path, save_path="flatland_step0.png")
-
+    # initial snapshot WITHOUT path overlay
+    world.draw(ent.goal, ent.hero, ent.enemies, save_path="flatland_step0.png")
+    
     sim = Simulator(keepout=1, render_every=None)
     for t in range(5):
         ent.hero, ent.enemies, status, _, _ = sim.sim_step(world, ent, ent.goal)
         print(f"t={t+1}, enemies={len(ent.enemies)}, status={status}")
         print(world.stats_str())
-        path, _ = Planner.bfs_path(world, ent.hero, ent.goal, set(ent.enemies), keepout=1)
-        world.draw(ent.goal, ent.hero, ent.enemies, path=path, save_path=f"flatland_step{t+1}.png")
+        
+        # snapshot WITHOUT path overlay
+        world.draw(ent.goal, ent.hero, ent.enemies, save_path=f"flatland_step{t+1}.png")
+        
         if status != "running":
             break
         print(f"Blocked ratio = {np.mean(world.grid != 0):.2f}")
-        
-        
-
-import argparse
-import utils   # where SHOW_FIGURES lives
+      
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

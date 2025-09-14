@@ -1,0 +1,7 @@
+Operating System:
+Linux meljahmi 6.8.0-79-generic #79~22.04.1-Ubuntu SMP PREEMPT_DYNAMIC Fri Aug 15 16:54:53 UTC 2 x86_64 x86_64 x86_64 GNU/Linux
+
+Python Version:
+Python 3.10.12
+
+Installed Packages:
